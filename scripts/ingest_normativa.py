@@ -20,7 +20,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 MODEL_EMBEDDING = "models/gemini-embedding-001"
-BATCH_SIZE = 10  # Tamaño seguro para evitar saturación de TPM
+BATCH_SIZE = 5  # Tamaño seguro para evitar saturación de TPM
 
 def extraer_texto_pdf(ruta_pdf):
     doc = pymupdf.open(ruta_pdf)
@@ -108,6 +108,7 @@ def generar_embeddings_con_reintento(textos):
             return [e.values for e in res.embeddings]
         except Exception as e:
             err_str = str(e)
+            print(f"\n    [DEBUG] Error completo: {err_str}\n")
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                 intentos_rate_limit += 1
                 if intentos_rate_limit > 3:
