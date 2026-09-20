@@ -22,7 +22,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 MODEL_EMBEDDING = "models/gemini-embedding-001"
-MODELOS_GENERACION = ["gemini-2.5-flash", "gemini-1.5-flash"]
+MODELOS_GENERACION = ["gemini-flash-latest", "gemini-2.5-flash"]
 
 app = FastAPI(
     title="API RAG Normativa Bancaria - ASFI / Banco Unión",
@@ -83,6 +83,7 @@ def generar_con_respaldo(prompt: str) -> str:
             except Exception as e:
                 ultimo_error = e
                 err_str = str(e)
+                print(f"[DEBUG] Falló modelo '{modelo}': {err_str}")
                 if "503" in err_str or "UNAVAILABLE" in err_str:
                     time.sleep(2)
                     continue
