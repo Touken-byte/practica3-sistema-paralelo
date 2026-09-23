@@ -22,7 +22,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 MODEL_EMBEDDING = "models/gemini-embedding-001"
-MODELOS_GENERACION = ["gemini-flash-latest", "gemini-2.5-flash"]
+MODELOS_GENERACION = ["gemini-3.6-flash", "gemini-flash-latest", "gemini-3.5-flash"]
 
 app = FastAPI(
     title="API RAG Normativa Bancaria - ASFI / Banco Unión",
