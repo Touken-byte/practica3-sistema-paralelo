@@ -21,3 +21,8 @@ documentos_u/
 *.log
 .DS_Store
 .vscode/
+
+# Archivos locales
+*.bak
+respuesta.json
+*.docx
