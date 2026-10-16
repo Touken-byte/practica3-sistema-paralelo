@@ -8,3 +8,6 @@ pytesseract
 pdf2image
 google-genai
 pydantic
+httpx
+beautifulsoup4
+lxml

@@ -142,3 +142,7 @@ RESPUESTA:"""
         respuesta=respuesta_texto,
         fuentes=fuentes_resp
     )
+
+# Fase 2: ingesta concurrente
+from ingesta_web import router as router_ingesta
+app.include_router(router_ingesta)
