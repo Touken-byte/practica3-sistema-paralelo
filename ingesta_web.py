@@ -17,7 +17,7 @@ import os
 import random
 import re
 import time
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from functools import lru_cache
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 import httpx
 import warnings
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+from bs4.element import NavigableString
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from google import genai
@@ -111,35 +112,63 @@ async def descargar(client: httpx.AsyncClient, url: str):
 # --------------------------------------------------------------------------
 # Etapa 2: CHUNKING (CPU-bound; se ejecuta en un hilo para no bloquear el event loop)
 # --------------------------------------------------------------------------
-PATRON_ARTICULO = re.compile(r"(?im)^\s*(art[ií]culo\s+\d+[^\n]{0,100})")
+PATRON_ARTICULO = re.compile(r"(?im)^\s*(art[ií]culo\s+(?:transitorio\s+|final\s+)?(?:\d+|[uú]nico)[°º.\-–\s]*(?:\([^)\n]{1,80}\))?)")
 
 
-def recortar_boilerplate(texto: str) -> str:
-    """Lexivox repite en cada pagina: barra de herramientas, indice, ficha tecnica, enlaces y aviso legal.
-    Si se detecta esa estructura, conserva solo el cuerpo de la norma (entre el indice y la ficha tecnica).
-    Si no se detecta (otros sitios), devuelve el texto sin tocar."""
-    ini = texto.find("Nota importante")          # ultima entrada del indice
-    if ini == -1:
-        return texto
-    ini += len("Nota importante")
-    fin = texto.find("Ficha Técnica (DCMI (", ini)  # encabezado de la ficha (el del indice es "(DCMI)")
-    if fin == -1:
-        return texto
-    cuerpo = texto[ini:fin].strip()
-    return cuerpo if len(cuerpo) >= MIN_CHARS_CHUNK else texto
+BLOQUES = {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr", "td", "th", "dt", "dd",
+           "blockquote", "table", "ul", "ol", "section", "article", "pre"}
+
+
+def _bloque_de(nodo):
+    for padre in nodo.parents:
+        if padre.name in BLOQUES:
+            return padre
+    return None
+
+
+def _texto_de(nodos, fin=None) -> str:
+    """Concatena el texto de los nodos con un salto de linea cada vez que se cambia de bloque
+    (p, div, h1, li...), y texto en linea sin cortar (asi 'la <a>Ley 439</a> de 2013' queda en una
+    sola linea). Solo toma NavigableString puros: se excluyen scripts, estilos y comentarios."""
+    partes, bloque_prev = [], object()
+    for nodo in nodos:
+        if fin is not None and nodo is fin:
+            break
+        if type(nodo) is NavigableString:
+            bloque = _bloque_de(nodo)
+            if bloque is not bloque_prev:
+                partes.append("\n")
+                bloque_prev = bloque
+            partes.append(str(nodo))
+        elif getattr(nodo, "name", None) == "br":
+            partes.append("\n")
+    return "".join(partes)
+
+
+def _normalizar(texto: str) -> str:
+    texto = texto.replace("\x00", "").replace("\xa0", " ")
+    texto = re.sub(r"[ \t]+", " ", texto)
+    texto = re.sub(r" ?\n ?", "\n", texto)
+    texto = re.sub(r"\n{2,}", "\n\n", texto)
+    return texto.strip()
 
 
 def limpiar_html_con_titulo(html: str):
+    """Devuelve (texto_limpio, titulo).
+    Lexivox repite en cada pagina barra de herramientas, indice, ficha tecnica, enlaces y aviso legal.
+    Sus paginas marcan el cuerpo de la norma entre las anclas id="norm" e id="dcmi"; si existen,
+    se conserva solo ese tramo. En otros sitios se toma el <main> o el <body> completo."""
     soup = BeautifulSoup(html, "lxml")
     titulo = " ".join(soup.title.get_text().split())[:150] if soup.title and soup.title.get_text() else ""
     for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form", "noscript"]):
         tag.decompose()
-    cuerpo = soup.find("main") or soup.body or soup
-    texto = cuerpo.get_text("\n")
-    texto = texto.replace("\x00", "")
-    texto = re.sub(r"[ \t\xa0]+", " ", texto)
-    texto = re.sub(r"\n\s*\n+", "\n\n", texto)
-    return recortar_boilerplate(texto.strip()), titulo
+    ancla_ini, ancla_fin = soup.find(id="norm"), soup.find(id="dcmi")
+    if ancla_ini is not None and ancla_fin is not None:
+        texto = _texto_de(ancla_ini.next_elements, ancla_fin)
+    else:
+        cuerpo = soup.find("main") or soup.body or soup
+        texto = _texto_de(cuerpo.descendants)
+    return _normalizar(texto), titulo
 
 
 def limpiar_html(html: str) -> str:
@@ -162,9 +191,12 @@ def dividir_en_chunks(texto: str, chunk_size: int, overlap: int) -> List[Dict[st
                 fin = corte
         contenido = texto[ini:fin].strip()
         if len(contenido) >= MIN_CHARS_CHUNK:
-            idx = bisect_right(posiciones, ini) - 1
+            idx = bisect_right(posiciones, ini) - 1          # encabezado vigente al inicio del fragmento
+            idx_fin = bisect_left(posiciones, fin) - 1        # ultimo encabezado que empieza dentro del fragmento
             ref = marcas[idx][1] if idx >= 0 else "Preámbulo"
-            chunks.append({"articulo_ref": ref, "contenido": contenido})
+            if idx_fin > idx:
+                ref = f"{ref} → {marcas[idx_fin][1]}"
+            chunks.append({"articulo_ref": ref[:250], "contenido": contenido})
         if fin >= n:
             break
         siguiente = fin - overlap
