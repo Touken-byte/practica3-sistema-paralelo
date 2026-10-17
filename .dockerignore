@@ -1,0 +1,12 @@
+.git
+.gitignore
+.env
+venv/
+.venv/
+__pycache__/
+*.pyc
+documentos_pdf/
+Informe_*
+*.bak
+respuesta.json
+resultados/

@@ -1,8 +1,7 @@
-version: '3.8'
-
 services:
   backend:
     build: .
+    image: lexbancario-backend:latest
     container_name: lexbancario_backend
     command: uvicorn main:app --host 0.0.0.0 --port 8000
     volumes:
@@ -13,9 +12,17 @@ services:
       - .env
     networks:
       - rag_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   frontend:
     build: .
+    image: lexbancario-frontend:latest
     container_name: lexbancario_frontend
     command: streamlit run app_streamlit.py --server.port 8501 --server.address 0.0.0.0
     volumes:
@@ -23,11 +30,11 @@ services:
     ports:
       - "8501:8501"
     depends_on:
-      - backend
-    env_file:
-      - .env
+      backend:
+        condition: service_healthy
     networks:
       - rag_net
+    restart: unless-stopped
 
 networks:
   rag_net:
