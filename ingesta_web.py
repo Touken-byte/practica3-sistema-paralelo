@@ -315,11 +315,12 @@ async def procesar_url(url, req, client, sem, limitador, contadores) -> dict:
 
             if not req.dry_run:
                 dominio = urlparse(url).netloc
+                prefijo = f"[{titulo}]\n" if titulo else ""   # el titulo viaja en cada fragmento (mejor busqueda y citas)
                 for i in range(0, len(chunks), req.batch_size):
                     lote = chunks[i:i + req.batch_size]
 
                     t0 = time.perf_counter()
-                    vectores = await embeber_lote([c["contenido"] for c in lote], limitador, contadores)
+                    vectores = await embeber_lote([prefijo + c["contenido"] for c in lote], limitador, contadores)
                     tiempos["embeddings"] += time.perf_counter() - t0
 
                     filas = [{
@@ -328,7 +329,7 @@ async def procesar_url(url, req, client, sem, limitador, contadores) -> dict:
                         "tipo_norma": "Web",
                         "jerarquia": "web",
                         "articulo_ref": c["articulo_ref"],
-                        "contenido": c["contenido"],
+                        "contenido": prefijo + c["contenido"],
                         "embedding": v,
                         "coleccion_id": req.coleccion_id,
                     } for c, v in zip(lote, vectores)]
