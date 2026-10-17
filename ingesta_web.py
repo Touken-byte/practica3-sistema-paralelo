@@ -23,7 +23,8 @@ from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 import httpx
-from bs4 import BeautifulSoup
+import warnings
+from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from google import genai
@@ -32,6 +33,7 @@ from pydantic import BaseModel, Field
 from supabase import create_client
 
 load_dotenv()
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 MODEL_EMBEDDING = "models/gemini-embedding-001"
 TABLA = "normativa_bancaria"
@@ -112,8 +114,24 @@ async def descargar(client: httpx.AsyncClient, url: str):
 PATRON_ARTICULO = re.compile(r"(?im)^\s*(art[ií]culo\s+\d+[^\n]{0,100})")
 
 
-def limpiar_html(html: str) -> str:
+def recortar_boilerplate(texto: str) -> str:
+    """Lexivox repite en cada pagina: barra de herramientas, indice, ficha tecnica, enlaces y aviso legal.
+    Si se detecta esa estructura, conserva solo el cuerpo de la norma (entre el indice y la ficha tecnica).
+    Si no se detecta (otros sitios), devuelve el texto sin tocar."""
+    ini = texto.find("Nota importante")          # ultima entrada del indice
+    if ini == -1:
+        return texto
+    ini += len("Nota importante")
+    fin = texto.find("Ficha Técnica (DCMI (", ini)  # encabezado de la ficha (el del indice es "(DCMI)")
+    if fin == -1:
+        return texto
+    cuerpo = texto[ini:fin].strip()
+    return cuerpo if len(cuerpo) >= MIN_CHARS_CHUNK else texto
+
+
+def limpiar_html_con_titulo(html: str):
     soup = BeautifulSoup(html, "lxml")
+    titulo = " ".join(soup.title.get_text().split())[:150] if soup.title and soup.title.get_text() else ""
     for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form", "noscript"]):
         tag.decompose()
     cuerpo = soup.find("main") or soup.body or soup
@@ -121,7 +139,11 @@ def limpiar_html(html: str) -> str:
     texto = texto.replace("\x00", "")
     texto = re.sub(r"[ \t\xa0]+", " ", texto)
     texto = re.sub(r"\n\s*\n+", "\n\n", texto)
-    return texto.strip()
+    return recortar_boilerplate(texto.strip()), titulo
+
+
+def limpiar_html(html: str) -> str:
+    return limpiar_html_con_titulo(html)[0]
 
 
 def dividir_en_chunks(texto: str, chunk_size: int, overlap: int) -> List[Dict[str, str]]:
@@ -151,13 +173,13 @@ def dividir_en_chunks(texto: str, chunk_size: int, overlap: int) -> List[Dict[st
 
 
 def _limpiar_y_dividir(html: str, chunk_size: int, overlap: int, max_chars: Optional[int]):
-    """Funcion para hilo: devuelve (chunks, n_caracteres, segundos)."""
+    """Funcion para hilo: devuelve (chunks, n_caracteres, titulo, segundos)."""
     t0 = time.perf_counter()
-    texto = limpiar_html(html)
+    texto, titulo = limpiar_html_con_titulo(html)
     if max_chars:
         texto = texto[:max_chars]
     chunks = dividir_en_chunks(texto, chunk_size, overlap)
-    return chunks, len(texto), time.perf_counter() - t0
+    return chunks, len(texto), titulo, time.perf_counter() - t0
 
 
 # --------------------------------------------------------------------------
@@ -234,7 +256,7 @@ def _borrar_url_sync(url: str, coleccion: str):
 # --------------------------------------------------------------------------
 async def procesar_url(url, req, client, sem, limitador, contadores) -> dict:
     tiempos = {"red": 0.0, "chunking": 0.0, "embeddings": 0.0, "insercion": 0.0}
-    res = {"url": url, "estado": "ok", "chunks": 0, "chars": 0, "error": None}
+    res = {"url": url, "titulo": "", "estado": "ok", "chunks": 0, "chars": 0, "error": None}
     insertado = False
     async with sem:
         try:
@@ -250,11 +272,12 @@ async def procesar_url(url, req, client, sem, limitador, contadores) -> dict:
             html, t_red = await descargar(client, url)
             tiempos["red"] += t_red
 
-            chunks, n_chars, t_chunk = await asyncio.to_thread(
+            chunks, n_chars, titulo, t_chunk = await asyncio.to_thread(
                 _limpiar_y_dividir, html, req.chunk_size, req.chunk_overlap, req.max_chars_por_url
             )
             tiempos["chunking"] += t_chunk
             res["chars"] = n_chars
+            res["titulo"] = titulo
             if not chunks:
                 raise ValueError("la pagina no contiene texto util")
 

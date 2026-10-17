@@ -26,3 +26,8 @@ documentos_u/
 *.bak
 respuesta.json
 *.docx
+
+# Python / archivos locales
+__pycache__/
+*.pyc
+Informe_*.pdf
